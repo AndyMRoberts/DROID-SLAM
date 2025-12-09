@@ -1,6 +1,3 @@
-torch
-torchvision
-torchaudio
 wheel
 tqdm
 evo

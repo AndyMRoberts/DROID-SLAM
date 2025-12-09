@@ -156,3 +156,6 @@ data
 figures/*.pdf
 
 
+# reconstructions and data
+reconstructions/
+data/

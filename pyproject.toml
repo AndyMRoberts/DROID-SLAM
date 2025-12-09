@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "torch"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "droid_backends"
+version = "0.1.0"
+description = "DROID SLAM CUDA extensions"
+authors = [
+    { name="Your Name", email="you@example.com" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+
+[project.optional-dependencies]
+dev = ["pytest", "mypy"]
+

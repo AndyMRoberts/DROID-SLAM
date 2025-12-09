@@ -46,6 +46,7 @@ Requires CUDA to be installed on your machine. If you run into issues, make sure
 ```Bash
 nvidia-smi
 python -c "import torch; print(torch.version.cuda)"
+
 ```
 
 ```Bash
@@ -53,6 +54,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # install requirements (tested up to torch 2.7)
+# for cuda 12.1:
+pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 
 # optional (for visualization)
