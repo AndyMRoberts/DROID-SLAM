@@ -55,7 +55,7 @@ source .venv/bin/activate
 
 # install requirements (tested up to torch 2.7)
 # for cuda 12.1:
-pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 torch-scatter==2.1.2 --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 
 # optional (for visualization)
