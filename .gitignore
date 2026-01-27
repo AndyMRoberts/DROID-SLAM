@@ -159,3 +159,17 @@ figures/*.pdf
 # reconstructions and data
 reconstructions/
 data/
+andy/figures/
+andy/*csv
+andy/metric_measurement/*.txt
+*.csv
+
+
+# C/C++ compiled files
+*.so
+*.o
+*.out
+*.a
+*.lib
+*.dylib
+*.dll
