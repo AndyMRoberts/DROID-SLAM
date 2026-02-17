@@ -105,6 +105,18 @@ if __name__ == '__main__':
     parser.add_argument("--frontend_device", type=str, default="cuda")
     parser.add_argument("--backend_device", type=str, default="cuda")
     
+    # Optional ONNXRuntime GPU backend for the neural networks
+    parser.add_argument("--use_onnx", action="store_true",
+                        help="run fnet/cnet/update using ONNXRuntime (CUDA EP)")
+    parser.add_argument("--onnx_fnet", type=str, default="fnet.onnx",
+                        help="path to exported fnet.onnx")
+    parser.add_argument("--onnx_cnet", type=str, default="cnet.onnx",
+                        help="path to exported cnet.onnx")
+    parser.add_argument("--onnx_update", type=str, default="update_core.onnx",
+                        help="path to exported update_core.onnx")
+    parser.add_argument("--onnx_tensorrt", action="store_true",
+                        help="prefer TensorRT EP if available (falls back to CUDA)")
+    
     parser.add_argument("--reconstruction_path", help="path to saved reconstruction")
     args = parser.parse_args()
 

@@ -16,7 +16,7 @@ from collections import OrderedDict
 from torch.multiprocessing import Process
 
 
-def load_network(weights, device="cuda:0"):
+def load_network(weights, device="cuda:0", args=None):
     net = DroidNet()
     state_dict = OrderedDict(
         [(k.replace("module.", ""), v) for (k, v) in torch.load(weights).items()]
@@ -31,6 +31,24 @@ def load_network(weights, device="cuda:0"):
     net.to(device=device)
     net.eval()
 
+    # Optional ONNXRuntime backend (GPU) for fnet/cnet/update
+    if args is not None and getattr(args, "use_onnx", False):
+        from onnx_backend import enable_onnx_backend
+
+        fnet_onnx = getattr(args, "onnx_fnet", "fnet.onnx")
+        cnet_onnx = getattr(args, "onnx_cnet", "cnet.onnx")
+        update_onnx = getattr(args, "onnx_update", "update_core.onnx")
+        prefer_trt = bool(getattr(args, "onnx_tensorrt", False))
+
+        enable_onnx_backend(
+            net,
+            fnet_onnx=fnet_onnx,
+            cnet_onnx=cnet_onnx,
+            update_onnx=update_onnx,
+            device=device,
+            prefer_tensorrt=prefer_trt,
+        )
+
     return net
 
 
@@ -43,7 +61,7 @@ def backend_process(args, depth_video1, depth_video2, device="cuda"):
         torch.cuda.set_device(device)
 
     with torch.no_grad():
-        net = load_network(args.weights, device=device)
+        net = load_network(args.weights, device=device, args=args)
 
         # use more compute if running backend on seperate device
         sleep_time = 10
@@ -133,7 +151,7 @@ def backend_process(args, depth_video1, depth_video2, device="cuda"):
 class DroidAsync:
     def __init__(self, args):
         super(DroidAsync, self).__init__()
-        net = load_network(args.weights)
+        net = load_network(args.weights, args=args)
         self.args = args
         self.disable_vis = args.disable_vis
 
@@ -146,7 +164,7 @@ class DroidAsync:
             "cuda" if not hasattr(args, "backend_device") else args.backend_device
         )
 
-        net = load_network(args.weights, device=self.frontend_device)
+        net = load_network(args.weights, device=self.frontend_device, args=args)
 
         self.video1 = DepthVideo(
             args.image_size,

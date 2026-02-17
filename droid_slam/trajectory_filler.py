@@ -30,9 +30,12 @@ class PoseTrajectoryFiller:
         self.video = video
         self.device = device
 
-        # mean, std for image normalization
-        self.MEAN = torch.as_tensor([0.485, 0.456, 0.406], device=self.device)[:, None, None]
-        self.STDV = torch.as_tensor([0.229, 0.224, 0.225], device=self.device)[:, None, None]
+        self.use_onnx = bool(getattr(self.fnet, "expects_raw_rgb_255", False))
+
+        # mean, std for image normalization (PyTorch path)
+        if not self.use_onnx:
+            self.MEAN = torch.as_tensor([0.485, 0.456, 0.406], device=self.device)[:, None, None]
+            self.STDV = torch.as_tensor([0.229, 0.224, 0.225], device=self.device)[:, None, None]
         
     @autocast(enabled=True)
     def __feature_encoder(self, image):
@@ -45,7 +48,11 @@ class PoseTrajectoryFiller:
         tt = torch.as_tensor(tstamps, device="cuda")
         images = torch.stack(images, 0).cuda()
         intrinsics = torch.stack(intrinsics, 0)
-        inputs = images[:,:,[2,1,0]].to(self.device) / 255.0
+        if self.use_onnx:
+            # ONNX feature encoder performs channel swap + normalization internally.
+            inputs = images.to(self.device, dtype=torch.float32)
+        else:
+            inputs = images[:,:,[2,1,0]].to(self.device) / 255.0
         
         ### linear pose interpolation ###
         N = self.video.counter.value
@@ -64,9 +71,14 @@ class PoseTrajectoryFiller:
         w = v * (tt - ts[t0]).unsqueeze(-1)
         Gs = SE3.exp(w) * Ps[t0]
 
-        # extract features (no need for context features)
-        inputs = inputs.sub_(self.MEAN).div_(self.STDV)
+        if not self.use_onnx:
+            # extract features (PyTorch path requires explicit normalization)
+            inputs = inputs.sub_(self.MEAN).div_(self.STDV)
+        # extract features (both paths)
         fmap = self.__feature_encoder(inputs)
+
+        if fmap.dtype != torch.float16:
+            fmap = fmap.to(dtype=torch.float16)
 
         self.video.counter.value += M
         self.video[N:N+M] = (tt, images[:,0], Gs.data, 1, None, intrinsics / 8.0, fmap)

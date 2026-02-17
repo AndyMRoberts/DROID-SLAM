@@ -16,8 +16,8 @@ from torch.multiprocessing import Process
 class Droid:
     def __init__(self, args):
         super(Droid, self).__init__()
-        self.load_weights(args.weights)
         self.args = args
+        self.load_weights(args.weights)
         self.disable_vis = args.disable_vis
 
         # store images, depth, poses, intrinsics (shared between processes)
@@ -57,6 +57,24 @@ class Droid:
 
         self.net.load_state_dict(state_dict)
         self.net.to("cuda:0").eval()
+
+        # Optional ONNXRuntime backend (GPU) for fnet/cnet/update
+        if getattr(self.args, "use_onnx", False):
+            from onnx_backend import enable_onnx_backend
+
+            fnet_onnx = getattr(self.args, "onnx_fnet", "fnet.onnx")
+            cnet_onnx = getattr(self.args, "onnx_cnet", "cnet.onnx")
+            update_onnx = getattr(self.args, "onnx_update", "update_core.onnx")
+            prefer_trt = bool(getattr(self.args, "onnx_tensorrt", False))
+
+            enable_onnx_backend(
+                self.net,
+                fnet_onnx=fnet_onnx,
+                cnet_onnx=cnet_onnx,
+                update_onnx=update_onnx,
+                device="cuda:0",
+                prefer_tensorrt=prefer_trt,
+            )
 
     def track(self, tstamp, image, depth=None, intrinsics=None):
         """ main thread - update map """
