@@ -61,7 +61,7 @@ int main(int argc, char *argv[]) {
 
     // Open CSV file for writing
     ofstream logFile(outputFile);
-    logFile << "Time (s),GPU Power (mW),CPU Power (mW),Total Power (mW),Average Power (mW)" << endl;
+    logFile << "Time (s),GPU Power (mW),CPU Power (mW),Total Power (mW),Average Power (mW),GPU Memory (MiB)" << endl;
 
     // Setup signal handler for graceful shutdown on Ctrl+C
     signal(SIGINT, signalHandler);
@@ -85,10 +85,11 @@ int main(int argc, char *argv[]) {
         double cpuPower = (energy2 - energy1) * 1e-6 * Hz; // µJ → W
 
 
-        // Read gpu power values using nvidia-smi
-        FILE* fp = popen("nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits", "r");
+        // Read gpu power and memory using nvidia-smi
+        FILE* fp = popen("nvidia-smi --query-gpu=power.draw,memory.used --format=csv,noheader,nounits", "r");
         float gpuPower;
-        fscanf(fp, "%f", &gpuPower);
+        float gpuMemoryMiB;
+        fscanf(fp, "%f, %f", &gpuPower, &gpuMemoryMiB);
         pclose(fp);
 
         if (!cpuPowerFile) {
@@ -114,7 +115,7 @@ int main(int argc, char *argv[]) {
         // cout << "Time: " << elapsedTime << " s\n";
 
         // Write to CSV file
-        logFile << elapsedTime << "," << gpuPower << "," << cpuPower << "," << power << "," << avgPower << endl;
+        logFile << elapsedTime << "," << gpuPower << "," << cpuPower << "," << power << "," << avgPower << "," << gpuMemoryMiB << endl;
 
         usleep(pauseTime); // sleep for 100,000 microsecons = 10Hz
 

@@ -48,7 +48,7 @@ class Droid:
         print(weights)
         self.net = DroidNet()
         state_dict = OrderedDict([
-            (k.replace("module.", ""), v) for (k, v) in torch.load(weights).items()])
+            (k.replace("module.", ""), v) for (k, v) in torch.load(weights, weights_only=True).items()])
 
         state_dict["update.weight.2.weight"] = state_dict["update.weight.2.weight"][:2]
         state_dict["update.weight.2.bias"] = state_dict["update.weight.2.bias"][:2]
@@ -98,6 +98,10 @@ class Droid:
         torch.cuda.empty_cache()
         print("#" * 32)
         self.backend(12)
+
+        # Free backend graph/correlation before trajectory filler (helps ONNX memory)
+        del self.backend
+        torch.cuda.empty_cache()
 
         camera_trajectory = self.traj_filler(stream)
         return camera_trajectory.inv().data.cpu().numpy()

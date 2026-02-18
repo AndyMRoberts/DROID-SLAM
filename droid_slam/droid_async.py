@@ -19,7 +19,7 @@ from torch.multiprocessing import Process
 def load_network(weights, device="cuda:0", args=None):
     net = DroidNet()
     state_dict = OrderedDict(
-        [(k.replace("module.", ""), v) for (k, v) in torch.load(weights).items()]
+        [(k.replace("module.", ""), v) for (k, v) in torch.load(weights, weights_only=True).items()]
     )
 
     state_dict["update.weight.2.weight"] = state_dict["update.weight.2.weight"][:2]

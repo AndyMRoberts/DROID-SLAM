@@ -14,7 +14,7 @@ from lietorch import SE3
 from cuda_timer import CudaTimer
 
 def view_reconstruction(filename: str, filter_thresh = 0.005, filter_count=2):
-    reconstruction_blob = torch.load(filename)
+    reconstruction_blob = torch.load(filename, weights_only=True)
     images = reconstruction_blob["images"].cuda()[...,::2,::2]
     disps = reconstruction_blob["disps"].cuda()[...,::2,::2]
     poses = reconstruction_blob["poses"].cuda()

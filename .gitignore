@@ -160,6 +160,7 @@ figures/*.pdf
 reconstructions/
 data/
 andy/figures/
+andy/runs/
 andy/*csv
 andy/metric_measurement/*.txt
 *.csv
@@ -173,3 +174,8 @@ andy/metric_measurement/*.txt
 *.lib
 *.dylib
 *.dll
+cnet.onnx
+update_core.onnx
+fnet.onnx
+/thirdparty/*   
+*.onnx
