@@ -115,6 +115,38 @@ class DroidNetNeuralBackbone(nn.Module):
         return fmaps, net, inp, delta, weight, eta, upmask
 
 
+# --- Features only: fnet + cnet (for pipeline fnet/cnet replacement) ---
+class DroidNetFeaturesOnly(nn.Module):
+    """Features extraction only: images -> fmaps, net, inp. For pipeline use."""
+
+    def __init__(self, droid_net):
+        super().__init__()
+        self.norm = _NormalizeImages()
+        self.fnet = droid_net.fnet
+        self.cnet = droid_net.cnet
+
+    def forward(self, images):
+        x = self.norm(images)
+        fmaps = self.fnet(x)
+        cnet_out = self.cnet(x)
+        net, inp = cnet_out.split([128, 128], dim=2)
+        net = torch.tanh(net)
+        inp = torch.relu(inp)
+        return fmaps, net, inp
+
+
+# --- Update only with GraphAgg (for pipeline update replacement) ---
+class DroidNetUpdateOnly(nn.Module):
+    """Update only: net, inp, corr, flow, ii, jj -> net_out, delta, weight, eta, upmask."""
+
+    def __init__(self, droid_net):
+        super().__init__()
+        self.update = droid_net.update
+
+    def forward(self, net, inp, corr, flow, ii, jj):
+        return self.update(net, inp, corr, flow, ii, jj)
+
+
 # --- Variant without graph aggregation (no scatter_mean) ---
 class DroidNetNeuralBackboneNoGraphAgg(nn.Module):
     """
@@ -265,6 +297,68 @@ def export_neural_backbone(model, device, output_path, use_graph_agg=True):
     return output_path
 
 
+def export_features_only(model, device, output_path):
+    """Export features-only ONNX: images -> fmaps, net, inp."""
+    B, N, H, W = 1, 3, 240, 320
+    images = (torch.rand(B, N, 3, H, W, device=device) * 255.0).float()
+    export_model = DroidNetFeaturesOnly(model).to(device).eval()
+    torch.onnx.export(
+        export_model,
+        (images,),
+        output_path,
+        export_params=True,
+        opset_version=17,
+        do_constant_folding=True,
+        input_names=["images"],
+        output_names=["fmaps", "net", "inp"],
+        dynamic_axes={
+            "images": {0: "batch", 1: "frames", 3: "height", 4: "width"},
+            "fmaps": {0: "batch", 1: "frames", 3: "h8", 4: "w8"},
+            "net": {0: "batch", 1: "frames", 3: "h8", 4: "w8"},
+            "inp": {0: "batch", 1: "frames", 3: "h8", 4: "w8"},
+        },
+    )
+    return output_path
+
+
+def export_update_only(model, device, output_path):
+    """Export update-only ONNX: net, inp, corr, flow, ii, jj -> net_out, delta, weight, eta, upmask."""
+    B, num_edges, h8, w8 = 1, 3, 30, 40
+    corr_ch = 4 * (2 * 3 + 1) ** 2
+    net = torch.randn(B, num_edges, 128, h8, w8, device=device)
+    inp = torch.randn(B, num_edges, 128, h8, w8, device=device)
+    corr = torch.randn(B, num_edges, corr_ch, h8, w8, device=device)
+    flow = torch.randn(B, num_edges, 4, h8, w8, device=device)
+    ii = torch.arange(num_edges, dtype=torch.long, device=device)
+    jj = torch.arange(num_edges, dtype=torch.long, device=device)
+
+    export_model = DroidNetUpdateOnly(model).to(device).eval()
+    torch.onnx.export(
+        export_model,
+        (net, inp, corr, flow, ii, jj),
+        output_path,
+        export_params=True,
+        opset_version=17,
+        do_constant_folding=True,
+        input_names=["net", "inp", "corr", "flow", "ii", "jj"],
+        output_names=["net_out", "delta", "weight", "eta", "upmask"],
+        dynamic_axes={
+            "net": {0: "batch", 1: "edges", 3: "h8", 4: "w8"},
+            "inp": {0: "batch", 1: "edges", 3: "h8", 4: "w8"},
+            "corr": {0: "batch", 1: "edges", 3: "h8", 4: "w8"},
+            "flow": {0: "batch", 1: "edges", 3: "h8", 4: "w8"},
+            "ii": {0: "edges"},
+            "jj": {0: "edges"},
+            "net_out": {0: "batch", 1: "edges", 3: "h8", 4: "w8"},
+            "delta": {0: "batch", 1: "edges", 2: "h8", 3: "w8"},
+            "weight": {0: "batch", 1: "edges", 2: "h8", 3: "w8"},
+            "eta": {0: "batch", 1: "keyframes", 3: "h8", 4: "w8"},
+            "upmask": {0: "batch", 1: "keyframes", 3: "h8", 4: "w8"},
+        },
+    )
+    return output_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="Convert DroidNet to single ONNX")
     parser.add_argument(
@@ -296,7 +390,13 @@ def main():
         choices=["cpu", "cuda"],
         help="Device for export (CPU recommended for ONNX compatibility)",
     )
+    parser.add_argument(
+        "--no-export-split",
+        action="store_true",
+        help="Skip exporting droid_net_features.onnx and droid_net_update.onnx",
+    )
     args = parser.parse_args()
+    export_split = not args.no_export_split
 
     device = torch.device(args.device)
     output_dir = os.path.dirname(args.out)
@@ -341,6 +441,27 @@ def main():
             print("  ONNX check passed.")
         else:
             raise
+
+    if export_split:
+        print("\n" + "=" * 60)
+        print("Export split models (for pipeline use)")
+        print("=" * 60)
+        out_dir = os.path.dirname(args.out) or "."
+        features_path = os.path.join(out_dir, "droid_net_features.onnx")
+        update_path = os.path.join(out_dir, "droid_net_update.onnx")
+        try:
+            export_features_only(model, device, features_path)
+            print(f"  Saved: {features_path}")
+            onnx.checker.check_model(onnx.load(features_path))
+            export_update_only(model, device, update_path)
+            print(f"  Saved: {update_path}")
+            onnx.checker.check_model(onnx.load(update_path))
+        except Exception as e:
+            if "scatter" in str(e).lower():
+                print(f"  Update export failed (scatter_mean): {e}")
+                print("  Use --use_onnx with fnet.onnx, cnet.onnx, update_core.onnx instead.")
+            else:
+                raise
 
     print("\nDone.")
 

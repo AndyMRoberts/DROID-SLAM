@@ -17,16 +17,6 @@ The notebook:
 
 Run all cells; the last cell checks the ONNX files. For running from the repo root, either copy these three files into the project root or note their paths for the next step.
 
-### Single ONNX (whole neural backbone)
-
-For a **single ONNX** that combines fnet, cnet, and update (including graph aggregation) in one model, use **`andy/onnx_droid_net_full.py`**:
-
-```bash
-python andy/onnx_droid_net_full.py --pth droid.pth --out droid_net.onnx
-```
-
-This produces `droid_net.onnx` with inputs `(images, corr, flow, ii, jj)` and outputs `(fmaps, net_out, inp, delta, weight, eta, upmask)`. CorrBlock output (`corr`) and motion (`flow`) are provided as inputs because CorrBlock uses custom CUDA backends and cannot be exported. Use `--try-full` to attempt (and document) a full DroidNet.forward export; it fails on SE3/lietorch and CorrBlock as expected.
-
 ## 2. Run in ONNX mode
 
 From the **project root** (where `demo.py` lives), run the demo with ONNX enabled:
@@ -78,6 +68,20 @@ Without GPU/cuDNN, ONNXRuntime will fall back to CPU (slower).
 
 So the heavy encoders and update core use the exported ONNX models; correlation and BA stay as in the original DROID-SLAM pipeline.
 
+## Findings: Full ONNX Model Attempt (abandoned)
+
+An attempt was made to export and run the whole DroidNet as a single ONNX model (or as `droid_net_features.onnx` + `droid_net_update.onnx`) via `andy/onnx_droid_net_full.py`. This approach was abandoned. Summary:
+
+**What was tried**
+- Exporting a combined model that includes fnet, cnet, and the full update (including GraphAgg with `scatter_mean`).
+- Integrating this into the pipeline with `--use_onnx_full`.
+
+**Why it didn't work**
+1. **GraphAgg shape baking**: The update's GraphAgg uses `torch_scatter.scatter_mean`, which aggregates over variable-sized groups determined by unique indices (`ii`). During ONNX export with `num_edges=3`, the output shapes were effectively fixed to `num_unique=3`. At runtime, the pipeline uses different numbers of edges (e.g. 1 for MotionFilter, 12+ for FactorGraph). The ONNX graph then produced shape mismatches such as `{1,1,48,64}` vs `{1,3,48,64}` or `{1,12,48,64}` vs `{1,3,48,64}`.
+2. **No benefit over split models**: Even when falling back to PyTorch for the update (to avoid the shape issues), full-ONNX mode only used ONNX for features. The individual models (`fnet.onnx`, `cnet.onnx`, `update_core.onnx`) already provide ONNX for the update core (GRU, delta, weight) and only use PyTorch for GraphAgg (eta, upmask). That gives better ONNX coverage than the full model approach.
+
+**Recommendation**: Use `--use_onnx` with the individual ONNX models from `onnx_conversion.ipynb`, or run purely in PyTorch. The full-ONNX export script (`onnx_droid_net_full.py`) remains for reference or profiling but is not wired into the pipeline.
+
 ## 3. Run TartanAir evaluation (test_tartanair)
 
 From the **project root**, run the TartanAir evaluation using the launcher (recommended) or the test script directly.
@@ -116,7 +120,7 @@ python launch_tartanair.py \
 ```bash
 python evaluation_scripts/test_tartanair_andy.py \
   --datapath /mnt/data/datasets/agricultural/tartanair/tartanair_mono_track/ \
-  --gt_path /mnt/data/datasets/agricultural/tartanair/tartanair/mono_gt/ \
+  --gt_path /mnt/data/datasets/agricultural/tartanair/mono_gt/ \
   --asynchronous \
   --disable_vis
 ```
