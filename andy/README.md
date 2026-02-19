@@ -91,7 +91,6 @@ From the **project root**, run the TartanAir evaluation using the launcher (reco
 PyTorch:
 
 ```bash
-sudo ls # enables sudo access needed for the power logger to have rapl access
 python launch_tartanair.py \
   --test_run_name tartanair_mono \
   --datapath /mnt/data/datasets/agricultural/tartanair/tartanair_mono_track/ \

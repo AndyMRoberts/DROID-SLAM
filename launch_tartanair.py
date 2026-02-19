@@ -3,142 +3,121 @@
 Generic launcher for TartanAir evaluation.
 
 Run from the project root (where demo.py lives). Creates a run directory
-andy/runs/YYYYMMDD_HHMM_<test_run_name>, writes metadata.txt with all parameters,
+andy/runs/YYYYMMDD_HHMM_<test_run_name>, writes metadata with all parameters,
 then runs evaluation_scripts/test_tartanair_andy.py with outputs directed there.
 
-Optional power logging: compile andy/metric_measurement/power.cc first:
-  g++ -o power andy/metric_measurement/power.cc
+Optional profiling (GPU/power etc): use --power_log and the 'profiler' package
+  (from profiler import Profiler). Run directory is created by the profiler.
 """
 
 import argparse
+import csv
 import json
 import os
-import signal
 import subprocess
 import sys
-import time
 from datetime import datetime
 
+try:
+    from profiler import Profiler
+except ImportError:
+    Profiler = None
 
-def _parse_power_log(csv_path, run_duration_s, total_frames):
-    """Parse power log CSV and compute run duration, total energy, energy per frame."""
-    summary = {}
+
+def _format_with_stdev(value, stddev=None):
+    """Format a numeric value with optional ± stddev on the same line."""
+    if value is None:
+        return "N/A"
+    if stddev is not None and stddev is not False:
+        try:
+            s = float(stddev)
+            if s == s:  # not nan
+                return f"{value} ± {s}"
+        except (TypeError, ValueError):
+            pass
+    return str(value)
+
+
+def _write_power_summary_txt(run_dir, meta):
+    """
+    Write power_summary.txt from profiler metadata.json content (meta dict).
+    Uses ± stdev on the same line when _stddev is present.
+    """
+    txt_path = os.path.join(run_dir, "power_summary.txt")
+    av = meta.get("averages") or {}
+    ef = meta.get("energy_per_frame_j") or {}
+
+    run_time_s = meta.get("run_time_s")
+    num_frames = meta.get("num_frames")
+
+    cpu_w = av.get("cpu_power_w")
+    gpu_w = av.get("gpu_power_w")
+    cpu_std = av.get("cpu_power_w_stddev")
+    gpu_std = av.get("gpu_power_w_stddev")
+    mean_power = (cpu_w or 0) + (gpu_w or 0)
+    # Approximate stddev of sum (independent): sqrt(sigma_cpu^2 + sigma_gpu^2)
+    mean_power_std = None
+    if cpu_std is not None and gpu_std is not None:
+        mean_power_std = (float(cpu_std) ** 2 + float(gpu_std) ** 2) ** 0.5
+    elif cpu_std is not None:
+        mean_power_std = float(cpu_std)
+    elif gpu_std is not None:
+        mean_power_std = float(gpu_std)
+
+    total_energy_j = (run_time_s * mean_power) if (run_time_s and mean_power) else None
+    total_energy_std = (run_time_s * mean_power_std) if (run_time_s and mean_power_std is not None) else None
+    total_energy_kj = round(total_energy_j / 1000, 2) if total_energy_j is not None else None
+    total_energy_kj_std = round(total_energy_std / 1000, 2) if total_energy_std else None
+
+    gpu_mem_gb = av.get("gpu_memory_gb")
+    gpu_mem_std = av.get("gpu_memory_gb_stddev")
+    mean_gpu_memory_mib = round(gpu_mem_gb * 1024, 2) if gpu_mem_gb is not None else None
+    mean_gpu_memory_mib_std = round(gpu_mem_std * 1024, 2) if gpu_mem_std is not None else None
+
+    data_csv = os.path.join(run_dir, "data.csv")
+    max_gpu_memory_gb = _max_gpu_memory_gb_from_csv(data_csv)
+    max_gpu_memory_mib = round(max_gpu_memory_gb * 1024, 2) if max_gpu_memory_gb is not None else None
+
+    ef_avg = ef.get("avg")
+    ef_avg_std = ef.get("avg_stddev")
+    ef_mj = round(ef_avg * 1000, 2) if ef_avg is not None else None
+    ef_mj_std = round(ef_avg_std * 1000, 2) if ef_avg_std is not None else None
+
+    lines = [
+        "Power and timing summary (from profiler)",
+        "=" * 50,
+        "",
+        f"run_duration_s: {_format_with_stdev(run_time_s)}",
+        f"total_energy_J: {_format_with_stdev(total_energy_j, total_energy_std)}",
+        f"total_energy_kJ: {_format_with_stdev(total_energy_kj, total_energy_kj_std)}",
+        f"mean_power_W: {_format_with_stdev(round(mean_power, 2) if mean_power else None, round(mean_power_std, 2) if mean_power_std is not None else None)}",
+        f"mean_gpu_memory_MiB: {_format_with_stdev(mean_gpu_memory_mib, mean_gpu_memory_mib_std)}",
+        f"max_gpu_memory_MiB: {max_gpu_memory_mib if max_gpu_memory_mib is not None else 'N/A'}",
+        f"total_frames: {num_frames if num_frames is not None else 'N/A'}",
+        f"energy_per_frame_J: {_format_with_stdev(ef_avg, ef_avg_std)}",
+        f"energy_per_frame_mJ: {_format_with_stdev(ef_mj, ef_mj_std)}",
+    ]
+    with open(txt_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return txt_path
+
+
+def _max_gpu_memory_gb_from_csv(csv_path):
+    """Read profiler data.csv and return max gpu_memory_gb (column index 5)."""
     try:
-        with open(csv_path) as f:
-            lines = [l.strip() for l in f if l.strip()]
-
-        if len(lines) < 2:
-            summary["error"] = "Power log empty or header only"
-            return summary
-
-        header = lines[0]
-        rows = []
-        for line in lines[1:]:
-            parts = line.split(",")
-            if len(parts) >= 4:
-                try:
-                    t = float(parts[0])
-                    gpu_pwr = float(parts[1])
-                    cpu_pwr = float(parts[2])
-                    total_pwr = float(parts[3])
-                    gpu_mem = float(parts[5]) if len(parts) >= 6 else None
-                    rows.append((t, gpu_pwr, cpu_pwr, total_pwr, gpu_mem))
-                except ValueError:
-                    continue
-
-        if not rows:
-            summary["error"] = "No valid power readings"
-            return summary
-
-        # Power log: Time (s), GPU Power, CPU Power, Total Power [, GPU Memory (MiB)]
-        # C++ outputs in W (nvidia-smi and RAPL-derived). Integrate for energy.
-        duration_from_log = rows[-1][0] - rows[0][0]
-        total_energy_j = 0.0
-        for i in range(len(rows) - 1):
-            dt = rows[i + 1][0] - rows[i][0]
-            avg_pwr = (rows[i][3] + rows[i + 1][3]) / 2.0
-            total_energy_j += avg_pwr * dt
-
-        summary["run_duration_s"] = round(run_duration_s, 2)
-        summary["power_log_duration_s"] = round(duration_from_log, 2)
-        summary["total_energy_J"] = round(total_energy_j, 2)
-        summary["total_energy_kJ"] = round(total_energy_j / 1000, 2)
-        summary["mean_power_W"] = round(total_energy_j / duration_from_log, 2) if duration_from_log > 0 else 0
-
-        gpu_mem_vals = [r[4] for r in rows if r[4] is not None]
-        if gpu_mem_vals:
-            summary["mean_gpu_memory_MiB"] = round(sum(gpu_mem_vals) / len(gpu_mem_vals), 2)
-            summary["max_gpu_memory_MiB"] = round(max(gpu_mem_vals), 2)
-
-        if total_frames and total_frames > 0:
-            energy_per_frame_J = total_energy_j / total_frames
-            summary["total_frames"] = total_frames
-            summary["energy_per_frame_J"] = round(energy_per_frame_J, 4)
-            summary["energy_per_frame_mJ"] = round(energy_per_frame_J * 1000, 2)
-        else:
-            summary["total_frames"] = "unknown (ate_results.json not found or empty)"
-            summary["energy_per_frame_J"] = "N/A"
-            summary["energy_per_frame_mJ"] = "N/A"
-
-    except Exception as e:
-        summary["error"] = str(e)
-    return summary
-
-
-def _plot_power_log(csv_path, png_path):
-    """Create power plot similar to view_power_log.ipynb and save to PNG."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        with open(csv_path) as f:
-            lines = [l.strip() for l in f if l.strip()]
-
-        if len(lines) < 2:
-            return False
-
-        # Parse CSV: Time (s), GPU Power, CPU Power, Total Power, Average Power [, GPU Memory (MiB)]
-        x, gpu_power, cpu_power, total_power, avg_power, gpu_memory = [], [], [], [], [], []
-        for line in lines[1:]:
-            parts = line.split(",")
-            if len(parts) >= 5:
-                try:
-                    x.append(float(parts[0]))
-                    gpu_power.append(float(parts[1]))
-                    cpu_power.append(float(parts[2]))
-                    total_power.append(float(parts[3]))
-                    avg_power.append(float(parts[4]))
-                    gpu_memory.append(float(parts[5]) if len(parts) >= 6 else float("nan"))
-                except ValueError:
-                    continue
-
-        if not x:
-            return False
-
-        plt.style.use("dark_background")
-        fig, ax1 = plt.subplots(figsize=(8, 5))
-        ax1.plot(x, gpu_power, label="GPU Power")
-        ax1.plot(x, cpu_power, label="CPU Power")
-        ax1.plot(x, avg_power, label="Avg Power")
-        ax1.set_xlabel("Time (s)")
-        ax1.set_ylabel("Power (W)")
-        ax1.set_ylim(0, max(500, max(total_power) * 1.1) if total_power else 500)
-        ax1.legend(loc="upper left")
-
-        if gpu_memory and any(m == m for m in gpu_memory):  # any non-nan (nan != nan)
-            ax2 = ax1.twinx()
-            ax2.plot(x, gpu_memory, color="cyan", label="GPU Memory", linestyle="--", alpha=0.8)
-            ax2.set_ylabel("GPU Memory (MiB)")
-            ax2.legend(loc="upper right")
-
-        plt.title("Power and GPU memory during run")
-        fig.tight_layout()
-        plt.savefig(png_path, dpi=150)
-        plt.close()
-        return True
+        with open(csv_path, newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)  # header
+            vals = []
+            for row in reader:
+                if len(row) > 5 and row[5].strip():
+                    try:
+                        vals.append(float(row[5]))
+                    except ValueError:
+                        pass
+            return max(vals) if vals else None
     except Exception:
-        return False
+        return None
 
 
 def main():
@@ -181,23 +160,34 @@ def main():
     parser.add_argument("--asynchronous", action="store_true")
     parser.add_argument("--frontend_device", type=str, default="cuda")
     parser.add_argument("--backend_device", type=str, default="cuda")
-
     parser.add_argument("--power_log", action="store_true",
-                        help="Log CPU/GPU power during run. Requires compiled power binary (g++ -o power andy/metric_measurement/power.cc)")
+                        help="Profile CPU/GPU power and metrics during run. Requires 'profiler' package.")
 
     args = parser.parse_args()
 
-    # Create run directory (project root = cwd when launcher is run)
     project_root = os.path.abspath(os.getcwd())
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in args.test_run_name)
-    run_dirname = f"{timestamp}_{safe_name}"
     runs_base = os.path.join(project_root, "andy", "runs")
-    run_dir = os.path.join(runs_base, run_dirname)
     os.makedirs(runs_base, exist_ok=True)
-    os.makedirs(run_dir, exist_ok=True)
 
-    # Build parameter dict for metadata
+    profiler_instance = None
+    if args.power_log:
+        if Profiler is None:
+            print("Error: --power_log requires the 'profiler' package. Install it or add it to PYTHONPATH.", file=sys.stderr)
+            sys.exit(1)
+        # Run directory is created by the profiler (andy/runs/YYYY_MM_DD_HHMM_<title>)
+        profiler_instance = Profiler(runs_base, frequency_hz=2.0, title=safe_name)
+        ref_dir = os.path.join(runs_base, "reference")
+        use_reference = os.path.isdir(ref_dir)
+        run_dir = profiler_instance.start(use_reference=use_reference)
+        print(f"Profiler started. Run directory: {run_dir}")
+    else:
+        run_dirname = f"{timestamp}_{safe_name}"
+        run_dir = os.path.join(runs_base, run_dirname)
+        os.makedirs(run_dir, exist_ok=True)
+
+    # Build parameter dict for metadata (run_dir may be from profiler or our own)
     params = {
         "test_run_name": args.test_run_name,
         "run_dir": run_dir,
@@ -234,8 +224,9 @@ def main():
         "timestamp": timestamp,
     }
 
-    # Write metadata.txt
-    with open(os.path.join(run_dir, "metadata.txt"), "w") as f:
+    # Write human-readable metadata.txt (launch params) so run_dir has it from the start
+    metadata_txt_path = os.path.join(run_dir, "metadata.txt")
+    with open(metadata_txt_path, "w") as f:
         f.write("TartanAir evaluation run metadata\n")
         f.write("=" * 60 + "\n\n")
         for k, v in params.items():
@@ -288,48 +279,13 @@ def main():
         cmd.append("--onnx_tensorrt")
 
     print(f"Run directory: {run_dir}")
-    print(f"Metadata written to {os.path.join(run_dir, 'metadata.txt')}")
-
-    power_proc = None
-    power_log_path = os.path.join(run_dir, "power_log.csv")
-    if args.power_log:
-        power_bin = os.path.join(project_root, "power")
-        if not os.path.isfile(power_bin):
-            power_bin = os.path.join(project_root, "andy", "metric_measurement", "power")
-        if os.path.isfile(power_bin):
-            print("Starting power logger...")
-            power_proc = subprocess.Popen(
-                ['sudo', power_bin, power_log_path],
-                cwd=project_root,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            time.sleep(0.5)  # let power logger initialize
-            if power_proc.poll() is not None:
-                _, err = power_proc.communicate()
-                print(f"Power logger failed to start: {err.decode()}", file=sys.stderr)
-                power_proc = None
-        else:
-            print("Power binary not found. Compile with: g++ -o power andy/metric_measurement/power.cc", file=sys.stderr)
-            power_proc = None
-
+    print(f"Metadata written to {metadata_txt_path}")
     print("Launching test_tartanair_andy.py...")
     print(" ".join(cmd))
 
-    run_start = time.perf_counter()
     result = subprocess.run(cmd, cwd=project_root)
-    run_duration_s = time.perf_counter() - run_start
 
-    if power_proc is not None:
-        power_proc.send_signal(signal.SIGINT)
-        try:
-            power_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            power_proc.kill()
-        print("Power logger stopped.")
-
-    # Load results and compute power metrics
+    # If we used the profiler, stop it and merge launch params into metadata
     total_frames = None
     ate_path = os.path.join(run_dir, "ate_results.json")
     if os.path.isfile(ate_path):
@@ -337,23 +293,23 @@ def main():
             ate_data = json.load(f)
         total_frames = ate_data.get("total_frames")
 
-    power_summary = {}
-    if os.path.isfile(power_log_path):
-        power_summary = _parse_power_log(power_log_path, run_duration_s, total_frames)
-        summary_path = os.path.join(run_dir, "power_summary.json")
-        with open(summary_path, "w") as f:
-            json.dump(power_summary, f, indent=2)
-        txt_path = os.path.join(run_dir, "power_summary.txt")
-        with open(txt_path, "w") as f:
-            f.write("Power and timing summary\n")
-            f.write("=" * 50 + "\n\n")
-            for k, v in power_summary.items():
-                f.write(f"{k}: {v}\n")
-        print(f"Power summary saved to {summary_path}")
+    if profiler_instance is not None:
+        profiler_instance.stop(num_frames=total_frames)
+        print("Profiler stopped. Power log and plot written by profiler (data.csv, plot.png).")
 
-        plot_path = os.path.join(run_dir, "power_plot.png")
-        if _plot_power_log(power_log_path, plot_path):
-            print(f"Power plot saved to {plot_path}")
+        # Merge launch params into metadata.json so one file has both profiler and run params
+        meta_path = os.path.join(run_dir, "metadata.json")
+        if os.path.isfile(meta_path):
+            with open(meta_path) as f:
+                meta = json.load(f)
+            meta["launch_params"] = params
+            with open(meta_path, "w") as f:
+                json.dump(meta, f, indent=2)
+            # Note in metadata.txt where profiler data lives (metadata.json, power_summary.txt)
+            with open(metadata_txt_path, "a") as f:
+                f.write("(Profiler data: metadata.json; human-readable power summary: power_summary.txt)\n")
+            power_summary_txt = _write_power_summary_txt(run_dir, meta)
+            print(f"Power summary (human-readable) saved to {power_summary_txt}")
 
     sys.exit(result.returncode)
 
