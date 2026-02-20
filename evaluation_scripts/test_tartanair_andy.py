@@ -101,6 +101,8 @@ if __name__ == '__main__':
 
     parser.add_argument("--run_dir", type=str, default=None,
                         help="Output directory for results, plots, ATE. If set, cwd changes here so figures/ goes to run_dir/figures/")
+    parser.add_argument("--max_frames", type=int, default=None,
+                        help="Process only first N frames per scene then run backend and evaluation (e.g. 1000 to avoid backend OOM)")
 
     args = parser.parse_args()
     torch.multiprocessing.set_start_method('spawn')
@@ -142,6 +144,9 @@ if __name__ == '__main__':
         gt_file = os.path.join(args.gt_path, f"{scene}.txt")
 
         stream = list(image_stream(scenedir, stereo=args.stereo))
+        if getattr(args, 'max_frames', None) is not None:
+            stream = stream[: args.max_frames]
+            print("Limited to first {} frames (--max_frames={})".format(len(stream), args.max_frames))
         total_frames += len(stream)
         for (tstamp, image, intrinsics) in tqdm(stream, desc=scene):
             droid.track(tstamp, image, intrinsics=intrinsics)
@@ -154,7 +159,9 @@ if __name__ == '__main__':
 
         ### do evaluation ###
         evaluator = TartanAirEvaluator()
-        traj_ref = np.loadtxt(gt_file, delimiter=' ')[:, [1, 2, 0, 4, 5, 3, 6]] # ned -> xyz
+        traj_ref = np.loadtxt(gt_file, delimiter=' ')[:, [1, 2, 0, 4, 5, 3, 6]]  # ned -> xyz
+        # align length when we truncated the stream (e.g. --max_frames)
+        traj_ref = traj_ref[: len(traj_est)]
 
         # usually stereo should not be scale corrected, but we are comparing monocular and stereo here
         results = evaluator.evaluate_one_trajectory(

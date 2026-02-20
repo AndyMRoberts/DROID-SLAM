@@ -136,7 +136,9 @@ def main():
     parser.add_argument("--datapath", type=str, required=True)
     parser.add_argument("--gt_path", type=str, required=True)
     parser.add_argument("--weights", type=str, default="droid.pth")
-    parser.add_argument("--buffer", type=int, default=1000)
+    parser.add_argument("--buffer", type=int, default=2048, help="Max frames in video buffer; use >= sequence length (e.g. TartanAir ~2k)")
+    parser.add_argument("--max_frames", type=int, default=None,
+                        help="Process only first N frames per scene then backend+eval (e.g. 1000 to avoid OOM)")
     parser.add_argument("--image_size", type=int, nargs=2, default=[384, 512])
     parser.add_argument("--stereo", action="store_true")
     parser.add_argument("--disable_vis", action="store_true")
@@ -200,6 +202,7 @@ def main():
         "gt_path": args.gt_path,
         "weights": args.weights,
         "buffer": args.buffer,
+        "max_frames": args.max_frames,
         "image_size": list(args.image_size),
         "stereo": args.stereo,
         "disable_vis": args.disable_vis,
@@ -266,6 +269,8 @@ def main():
         cmd.append("--plot_curve")
     if args.scene:
         cmd.extend(["--scene", args.scene])
+    if getattr(args, "max_frames", None) is not None:
+        cmd.extend(["--max_frames", str(args.max_frames)])
     if args.upsample:
         cmd.append("--upsample")
     if args.asynchronous:

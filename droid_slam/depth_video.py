@@ -11,7 +11,9 @@ import geom.projective_ops as pops
 
 class DepthVideo:
     def __init__(self, image_size=[480, 640], buffer=1024, stereo=False, device="cuda:0"):
-                
+        # Frontend writes "next" pose at index t1 (can equal buffer when we have buffer frames).
+        buffer_poses = buffer + 1
+        self.buffer = buffer  # max number of frames (indices 0..buffer-1)
         # current keyframe count
         self.counter = Value('i', 0)
         self.ready = Value('i', 0)
@@ -23,8 +25,8 @@ class DepthVideo:
         self.images = torch.zeros(buffer, 3, ht, wd, device=device, dtype=torch.uint8)
         self.dirty = torch.zeros(buffer, device=device, dtype=torch.bool).share_memory_()
         self.red = torch.zeros(buffer, device=device, dtype=torch.bool).share_memory_()
-        self.poses = torch.zeros(buffer, 7, device=device, dtype=torch.float).share_memory_()
-        self.disps = torch.ones(buffer, ht//8, wd//8, device=device, dtype=torch.float).share_memory_()
+        self.poses = torch.zeros(buffer_poses, 7, device=device, dtype=torch.float).share_memory_()
+        self.disps = torch.ones(buffer_poses, ht//8, wd//8, device=device, dtype=torch.float).share_memory_()
         self.disps_sens = torch.zeros(buffer, ht//8, wd//8, device=device, dtype=torch.float).share_memory_()
         self.disps_up = torch.zeros(buffer, ht, wd, device=device, dtype=torch.float).share_memory_()
         self.intrinsics = torch.zeros(buffer, 4, device=device, dtype=torch.float).share_memory_()
@@ -132,6 +134,8 @@ class DepthVideo:
 
     def append(self, *item):
         with self.get_lock():
+            if self.counter.value >= self.buffer:
+                return  # buffer full; drop frame to avoid overflow (use larger --buffer for long sequences)
             self.__item_setter(self.counter.value, item)
 
 

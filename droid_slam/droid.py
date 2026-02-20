@@ -1,3 +1,4 @@
+import gc
 import torch
 import lietorch
 import numpy as np
@@ -90,8 +91,11 @@ class Droid:
         """ terminate the visualization process, return poses [t, q] """
 
         del self.frontend
-
+        del self.filterx
+        gc.collect()
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
+
         print("#" * 32)
         self.backend(7)
 

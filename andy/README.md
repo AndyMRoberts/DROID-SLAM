@@ -88,24 +88,44 @@ From the **project root**, run the TartanAir evaluation using the launcher (reco
 
 **Launcher (recommended)** — creates `andy/runs/YYYYMMDD_HHMM_<test_run_name>/` with `metadata.txt`, ATE results, and plots:
 
-PyTorch:
+# PyTorch:
+
+## tartainair mono online
 
 ```bash
 python launch_tartanair.py \
-  --test_run_name tartanair_mono \
+  --test_run_name tartanair_mono_online \
   --datapath /mnt/data/datasets/agricultural/tartanair/tartanair_mono_track/ \
   --gt_path /mnt/data/datasets/agricultural/tartanair/mono_gt/ \
   --asynchronous \
   --disable_vis \
   --power_log
 ```
+example run: andy/runs/2026_02_19_1755_tartanair_mono_online
+![Plot](runs/2026_02_19_1755_tartanair_mono_online/plot.png)
+Mean ATE: 0.0452360035494126
 
-ONNX:
-
+## tartanair mono offline
 ```bash
-sudo ls # enables sudo access needed for the power logger to have rapl access
 python launch_tartanair.py \
-  --test_run_name tartanair_mono_onnx \
+  --test_run_name tartanair_mono_offline \
+  --datapath /mnt/data/datasets/agricultural/tartanair/tartanair_mono_track/ \
+  --gt_path /mnt/data/datasets/agricultural/tartanair/mono_gt/ \
+  --disable_vis \
+  --power_log
+```
+example run: andy/runs/2026_02_20_1416_tartanair_mono_offline
+![Plot](runs/2026_02_20_1416_tartanair_mono_offline/plot.png)
+Mean ATE: 0.1073945649020364
+
+
+
+# ONNX:
+
+## tartanair mono onnx online
+```bash
+python launch_tartanair.py \
+  --test_run_name tartanair_mono_onnx_online \
   --datapath /mnt/data/datasets/agricultural/tartanair/tartanair_mono_track/ \
   --gt_path /mnt/data/datasets/agricultural/tartanair/mono_gt/ \
   --asynchronous \
@@ -113,6 +133,32 @@ python launch_tartanair.py \
   --use_onnx \
   --power_log
 ```
+**System Fails** due to memory issues
+
+run data: andy/runs/2026_02_20_1138_tartanair_mono_onnx_online
+![plot](runs/2026_02_20_1138_tartanair_mono_onnx_online/plot.png)
+
+## tartanair mono onnx offline
+```bash
+python launch_tartanair.py \
+  --test_run_name tartanair_mono_onnx_offline \
+  --datapath /mnt/data/datasets/agricultural/tartanair/tartanair_mono_track/ \
+  --gt_path /mnt/data/datasets/agricultural/tartanair/mono_gt/ \
+  --disable_vis \
+  --use_onnx \
+  --power_log \
+  --max_frames 500
+```
+Had to implement changes to allow running on 16GB GPU
+1. depth_video.py buffer overrun issue occurred, buffer was 1 too small so limit increased
+2. default buffer set to 2048 to allow tartanair with 1879 images to run without hitting buffer
+3. cleanup of front end, clearing cache, cuda sync and empty cache, garbage collect
+4. reduce images process down to even 100!
+
+Still **System Fails** due to memory issues
+
+Possible Next Steps:
+1. Try running half-size data set and evaluation. 
 
 **Direct test script** (no run directory):
 
