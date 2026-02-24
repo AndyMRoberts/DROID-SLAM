@@ -179,13 +179,12 @@ def main():
             sys.exit(1)
         # Run directory is created by the profiler (andy/runs/YYYY_MM_DD_HHMM_<title>)
         # profiler_instance = Profiler(runs_base, frequency_hz=2.0, title=safe_name)
-        p = Profiler(runs_base, frequency_hz=2.0, title=safe_name,
+        profiler_instance = Profiler(runs_base, frequency_hz=2.0, title=safe_name,
              cpu_power_max_w=200.0, 
              gpu_power_max_w=200.0,
              gpu_memory_total_gb= 16.376)
         ref_dir = os.path.join(runs_base, "reference")
-        use_reference = os.path.isdir(ref_dir)
-        run_dir = profiler_instance.start(use_reference=use_reference)
+        run_dir = profiler_instance.start(use_reference=True)
         print(f"Profiler started. Run directory: {run_dir}")
     else:
         run_dirname = f"{timestamp}_{safe_name}"
@@ -278,9 +277,9 @@ def main():
         cmd.append("--asynchronous")
     if args.use_onnx:
         cmd.append("--use_onnx")
-        cmd.extend(["--onnx_fnet", f'{args.onnx_dir}/fnet.onnx'])
-        cmd.extend(["--onnx_cnet", f'{args.onnx_cnet}/cnet.onnx'])
-        cmd.extend(["--onnx_update", f'{args.onnx_update}/onnx_update.onnx'])
+        cmd.extend(["--onnx_fnet", os.path.join(args.onnx_dir, "fnet.onnx")])
+        cmd.extend(["--onnx_cnet", os.path.join(args.onnx_dir, "cnet.onnx")])
+        cmd.extend(["--onnx_update", os.path.join(args.onnx_dir, "update_core.onnx")])
     if args.onnx_tensorrt:
         cmd.append("--onnx_tensorrt")
 

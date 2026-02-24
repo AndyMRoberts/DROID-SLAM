@@ -47,12 +47,63 @@ Optional:
 - **`--onnx_tensorrt`** – use TensorRT execution provider if available (otherwise falls back to CUDA).
 - Other `demo.py` options (e.g. `--disable_vis`, `--stride`, `--reconstruction_path`) work as usual.
 
+## 3. Quantize ONNX models (optional)
+
+After exporting `fnet.onnx`, `cnet.onnx`, and `update_core.onnx` (see section 1), you can quantize them for smaller size and faster inference using **`andy/onnx_quantize.py`**. The script reads from `andy/onnx/` by default and writes to a new directory with a suffix (e.g. `andy/onnx_dynamic_int8/` or `andy/onnx_static_int8/`).
+
+**Modes:**
+
+- **Dynamic INT8** (default) — no calibration; uses ONNX Runtime dynamic quantization. Not supported by TensorRT.
+- **Static INT8** — calibration-based; produces TensorRT-friendly QDQ models. Use `--static`.
+- **FP16** — float16 conversion via `onnxconverter-common`. Use `--weight-type fp16 --suffix fp16`.
+
+**Examples** (run from project root):
+
+```bash
+# Dynamic INT8 → andy/onnx_dynamic_int8/
+python andy/onnx_quantize.py
+
+# Static INT8 (calibration) → andy/onnx_static_int8/
+python andy/onnx_quantize.py --static
+
+# FP16 → andy/onnx_fp16/
+python andy/onnx_quantize.py --weight-type fp16 --suffix fp16
+```
+
+**Options:** `--input-dir` (default `andy/onnx`), `--suffix`, `--calibration-batches`, `--calibration-shape` (for fnet/cnet; default `1,1,3,384,512` to match default image size). See `python andy/onnx_quantize.py --help`.
+
+**Using quantized models with the TartanAir launcher:** pass the output directory as `--onnx_dir`:
+
+```bash
+python launch_tartanair.py \
+  --test_run_name tartanair_mono_onnx_quantized \
+  --datapath /path/to/tartanair \
+  --gt_path /path/to/gt \
+  --use_onnx \
+  --onnx_dir andy/onnx_dynamic_int8 \
+  --disable_vis
+```
+
+Same works with `andy/onnx_static_int8` or `andy/onnx_fp16` if you produced those.
+
+Note that to run the onnx_static_int8 in the current environment need to install tensorrt
+```
+**install to system at usr/local/tensorrt/**
+**usr/loca/tensorrt/ should be added to path in bashrc/zshrc once already installed in system**
+# in working env:
+pip install /usr/local/tensorrt/python/tensorrt-10.15.1.29-cp39-none-linux_x86_64.whl
+pip uninstall onnxruntime-gpu
+pip install onnxruntime-gpu
+```
+
+
 ## Prerequisites
 
 - **Conda env** with PyTorch and DROID dependencies (e.g. `droidenv`).
 - **onnxruntime-gpu** in that env, e.g.  
   `pip install onnxruntime-gpu`
 - **cuDNN 9** available to ONNXRuntime for the CUDA execution provider (e.g. install into the env via conda: `conda install -c nvidia cudnn=9`). The ONNX backend in `droid_slam/onnx_backend.py` will preload cuDNN from the env's `lib/` when needed.
+- **tensorRT** for running int8 quantised onnx models
 
 Without GPU/cuDNN, ONNXRuntime will fall back to CPU (slower).
 
@@ -82,7 +133,7 @@ An attempt was made to export and run the whole DroidNet as a single ONNX model 
 
 **Recommendation**: Use `--use_onnx` with the individual ONNX models from `onnx_conversion.ipynb`, or run purely in PyTorch. The full-ONNX export script (`onnx_droid_net_full.py`) remains for reference or profiling but is not wired into the pipeline.
 
-## 3. Run TartanAir evaluation (test_tartanair)
+## 4. Run TartanAir evaluation (test_tartanair)
 
 From the **project root**, run the TartanAir evaluation using the launcher (recommended) or the test script directly.
 
@@ -131,6 +182,7 @@ python launch_tartanair.py \
   --asynchronous \
   --disable_vis \
   --use_onnx \
+  --onnx_dir andy/onnx/ \
   --power_log
 ```
 **System Fails** due to memory issues
@@ -141,15 +193,14 @@ run data: andy/runs/2026_02_20_1138_tartanair_mono_onnx_online
 ## tartanair mono onnx offline
 ```bash
 python launch_tartanair.py \
-  --test_run_name tartanair_mono_onnx_online \
+  --test_run_name tartanair_mono_onnx_offline \
   --datapath /mnt/data/datasets/agricultural/tartanair/tartanair_mono_track/ \
   --gt_path /mnt/data/datasets/agricultural/tartanair/mono_gt/ \
   --disable_vis \
   --use_onnx \
-  --asynchronous \
-  --onnx_dir andy/onnx/ \
-  --power_log \
-  --max_frames 500
+  --onnx_dir andy/onnx_static_int8/ \
+  --power_log  \
+  --onnx_tensorrt
 ```
 Had to implement changes to allow running on 16GB GPU
 1. depth_video.py buffer overrun issue occurred, buffer was 1 too small so limit increased
@@ -174,7 +225,7 @@ python evaluation_scripts/test_tartanair_andy.py \
 
 Add `--use_onnx` for ONNX runtime.
 
-## 4. Power logging (optional)
+## 5. Power logging (optional)
 
 Power logging is integrated into `launch_tartanair` via `--power_log`. It uses the C++ tool in `andy/metric_measurement/power.cc` (CPU RAPL + nvidia-smi for GPU power and memory).
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Quantize DPVO ONNX encoders (fnet and inet) from andy/onnx/ and save to a new
-folder with a quantization suffix (e.g. andy/onnx_dynamic_int8/ or andy/onnx_static_int8/).
+Quantize DROID-SLAM ONNX models (fnet, cnet, update_core) from andy/onnx/ and save
+to a new folder with a quantization suffix (e.g. andy/onnx_dynamic_int8/ or andy/onnx_static_int8/).
 
 Supports:
   - int8/uint8 dynamic: ONNX Runtime dynamic quantization (no calibration).
@@ -11,7 +11,7 @@ Supports:
     TensorRT execution provider.
   - fp16: Float16 conversion via onnxconverter-common (pip install onnxconverter-common).
 
-Use the output directory as --onnx_dir when running with --backend onnx.
+Use the output directory as --onnx_dir when running launch_tartanair.py with --use_onnx.
 """
 
 import argparse
@@ -31,28 +31,25 @@ from onnxruntime.quantization import (
 from onnxruntime.quantization.shape_inference import quant_pre_process
 
 
-class DPVOCalibrationDataReader(CalibrationDataReader):
-    """Yields calibration batches for fnet/inet: input 'images' with shape (1, 1, 3, H, W), float32 in [-0.5, 0.5]."""
+class DROIDImageCalibrationDataReader(CalibrationDataReader):
+    """Yields calibration batches for fnet/cnet: input 'images' with shape (1, N, 3, H, W), float32 in [0, 255]."""
 
-    def __init__(self, model_path, shape=(1, 1, 3, 480, 640), num_batches=20, rng=None):
+    def __init__(self, model_path, shape=(1, 1, 3, 384, 512), num_batches=20, rng=None):
         self.model_path = model_path
         self.shape = shape
         self.num_batches = num_batches
         self.rng = np.random.default_rng(rng)
-        self._input_name = None
+        self._input_name = "images"
         self._batch_index = 0
-        # Infer input name from model
         model = onnx.load(model_path)
         if model.graph.input:
             self._input_name = model.graph.input[0].name
-        else:
-            self._input_name = "images"
 
     def get_next(self):
         if self._batch_index >= self.num_batches:
             return None
-        # DPVO normalizes images as 2*(x/255)-0.5 -> range [-0.5, 0.5]
-        data = self.rng.uniform(low=-0.5, high=0.5, size=self.shape).astype(np.float32)
+        # DROID expects images in [0, 255] (BGR, OpenCV convention)
+        data = self.rng.uniform(low=0.0, high=255.0, size=self.shape).astype(np.float32)
         self._batch_index += 1
         return {self._input_name: data}
 
@@ -60,15 +57,56 @@ class DPVOCalibrationDataReader(CalibrationDataReader):
         self._batch_index = 0
 
 
+# Default shapes for update_core: batch=1, edges=2, h8=48, w8=64 (1/8 of 384x512), corr_channels=196
+UPDATE_CORE_DEFAULT_SHAPE = {
+    "net": (1, 2, 128, 48, 64),
+    "inp": (1, 2, 128, 48, 64),
+    "corr": (1, 2, 196, 48, 64),
+    "flow": (1, 2, 4, 48, 64),
+}
+
+
+class DROIDUpdateCalibrationDataReader(CalibrationDataReader):
+    """Yields calibration batches for update_core: inputs net, inp, corr, flow."""
+
+    def __init__(self, model_path, shapes=None, num_batches=20, rng=None):
+        self.model_path = model_path
+        self.shapes = shapes or UPDATE_CORE_DEFAULT_SHAPE.copy()
+        self.num_batches = num_batches
+        self.rng = np.random.default_rng(rng)
+        self._batch_index = 0
+        self._input_names = []
+        model = onnx.load(model_path)
+        for inp in model.graph.input:
+            self._input_names.append(inp.name)
+        for name in self._input_names:
+            if name not in self.shapes:
+                # fallback: use (1, 2, 128, 48, 64) for unknown inputs
+                self.shapes[name] = (1, 2, 128, 48, 64)
+
+    def get_next(self):
+        if self._batch_index >= self.num_batches:
+            return None
+        feed = {}
+        for name in self._input_names:
+            shape = self.shapes[name]
+            feed[name] = self.rng.standard_normal(size=shape).astype(np.float32)
+        self._batch_index += 1
+        return feed
+
+    def rewind(self):
+        self._batch_index = 0
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Quantize fnet.onnx and inet.onnx from an ONNX directory."
+        description="Quantize fnet.onnx, cnet.onnx, and update_core.onnx from an ONNX directory."
     )
     parser.add_argument(
         "--input-dir",
         type=str,
         default=None,
-        help="Directory containing fnet.onnx and inet.onnx (default: andy/onnx)",
+        help="Directory containing fnet.onnx, cnet.onnx, update_core.onnx (default: andy/onnx)",
     )
     parser.add_argument(
         "--suffix",
@@ -98,8 +136,8 @@ def main():
     parser.add_argument(
         "--calibration-shape",
         type=str,
-        default="1,1,3,480,640",
-        help="Comma-separated shape for calibration input [batch,frames,channels,height,width] (default: 1,1,3,480,640)",
+        default="1,1,3,384,512",
+        help="Comma-separated shape for calibration input [batch,frames,channels,height,width] for fnet/cnet (default: 1,1,3,384,512)",
     )
     args = parser.parse_args()
     if args.static and args.weight_type in ("int8", "uint8") and args.suffix == "dynamic_int8":
@@ -115,8 +153,9 @@ def main():
         raise SystemExit(f"Input directory not found: {input_dir}")
 
     fnet_path = os.path.join(input_dir, "fnet.onnx")
-    inet_path = os.path.join(input_dir, "inet.onnx")
-    for name, p in [("fnet", fnet_path), ("inet", inet_path)]:
+    cnet_path = os.path.join(input_dir, "cnet.onnx")
+    update_core_path = os.path.join(input_dir, "update_core.onnx")
+    for name, p in [("fnet", fnet_path), ("cnet", cnet_path), ("update_core", update_core_path)]:
         if not os.path.isfile(p):
             raise SystemExit(f"Missing {name} model: {p}")
 
@@ -129,7 +168,8 @@ def main():
 
     models = [
         ("fnet", fnet_path, os.path.join(output_dir, "fnet.onnx")),
-        ("inet", inet_path, os.path.join(output_dir, "inet.onnx")),
+        ("cnet", cnet_path, os.path.join(output_dir, "cnet.onnx")),
+        ("update_core", update_core_path, os.path.join(output_dir, "update_core.onnx")),
     ]
 
     if args.weight_type == "fp16":
@@ -157,7 +197,7 @@ def main():
                 )
             for name, src, dst in models:
                 print(f"Static quantizing {name}: {src} -> {dst}")
-                with tempfile.TemporaryDirectory(prefix="dpvo_quant_") as tmpdir:
+                with tempfile.TemporaryDirectory(prefix="droid_quant_") as tmpdir:
                     shape_inferred = os.path.join(tmpdir, "shape_inferred.onnx")
                     quant_pre_process(
                         src,
@@ -165,11 +205,17 @@ def main():
                         skip_optimization=False,
                         skip_onnx_shape=False,
                     )
-                    calib_reader = DPVOCalibrationDataReader(
-                        shape_inferred,
-                        shape=calib_shape,
-                        num_batches=args.calibration_batches,
-                    )
+                    if name == "update_core":
+                        calib_reader = DROIDUpdateCalibrationDataReader(
+                            shape_inferred,
+                            num_batches=args.calibration_batches,
+                        )
+                    else:
+                        calib_reader = DROIDImageCalibrationDataReader(
+                            shape_inferred,
+                            shape=calib_shape,
+                            num_batches=args.calibration_batches,
+                        )
                     quantize_static(
                         shape_inferred,
                         dst,
@@ -183,6 +229,10 @@ def main():
                         extra_options={
                             "ActivationSymmetric": True,
                             "WeightSymmetric": True,
+                            # TensorRT's DequantizeLinear only accepts Int8 (not Int32). ORT quantizes
+                            # biases as Int32 by default, which causes TRT import to fail. Keeping
+                            # biases in float avoids that and is standard for TensorRT-friendly QDQ.
+                            "QuantizeBias": False,
                         },
                     )
                 print(f"  Saved: {dst}")
@@ -199,7 +249,7 @@ def main():
                 print(f"  Saved: {dst}")
 
     print(f"Done. Output models in: {output_dir}")
-    print(f"Run with: --backend onnx --onnx_dir {output_dir}")
+    print(f"Run with: --use_onnx --onnx_dir {output_dir}")
 
 
 if __name__ == "__main__":

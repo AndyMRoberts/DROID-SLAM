@@ -18,7 +18,7 @@ print(f'Data will be saved to output directory: {output_dir}')
 
 #first record a 10s reference dataset
 print(f'Recording reference to {output_dir}/reference')
-ref_dir = p.record_reference(duration_seconds=5)
+ref_dir = p.record_reference(duration_seconds=60)
 
 # option to store own data in reference directory
 with open(f'{ref_dir}/extra_data.txt', 'w') as f:
