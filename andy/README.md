@@ -141,11 +141,13 @@ run data: andy/runs/2026_02_20_1138_tartanair_mono_onnx_online
 ## tartanair mono onnx offline
 ```bash
 python launch_tartanair.py \
-  --test_run_name tartanair_mono_onnx_offline \
+  --test_run_name tartanair_mono_onnx_online \
   --datapath /mnt/data/datasets/agricultural/tartanair/tartanair_mono_track/ \
   --gt_path /mnt/data/datasets/agricultural/tartanair/mono_gt/ \
   --disable_vis \
   --use_onnx \
+  --asynchronous \
+  --onnx_dir andy/onnx/ \
   --power_log \
   --max_frames 500
 ```

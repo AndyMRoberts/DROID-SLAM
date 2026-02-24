@@ -96,6 +96,7 @@ def _write_power_summary_txt(run_dir, meta):
         f"total_frames: {num_frames if num_frames is not None else 'N/A'}",
         f"energy_per_frame_J: {_format_with_stdev(ef_avg, ef_avg_std)}",
         f"energy_per_frame_mJ: {_format_with_stdev(ef_mj, ef_mj_std)}",
+        f"frames_per_second: {num_frames/run_time_s if (num_frames is not None and run_time_s is not None and run_time_s > 0) else 'N/A'}"
     ]
     with open(txt_path, "w") as f:
         f.write("\n".join(lines) + "\n")
@@ -128,9 +129,7 @@ def main():
                         help="Name for this test run (used in run directory)")
     parser.add_argument("--use_onnx", action="store_true",
                         help="Use ONNXRuntime for fnet/cnet/update")
-    parser.add_argument("--onnx_fnet", type=str, default="fnet.onnx")
-    parser.add_argument("--onnx_cnet", type=str, default="cnet.onnx")
-    parser.add_argument("--onnx_update", type=str, default="update_core.onnx")
+    parser.add_argument("--onnx_dir", type=str, default="andy/onnx/")
     parser.add_argument("--onnx_tensorrt", action="store_true")
 
     parser.add_argument("--datapath", type=str, required=True)
@@ -179,7 +178,11 @@ def main():
             print("Error: --power_log requires the 'profiler' package. Install it or add it to PYTHONPATH.", file=sys.stderr)
             sys.exit(1)
         # Run directory is created by the profiler (andy/runs/YYYY_MM_DD_HHMM_<title>)
-        profiler_instance = Profiler(runs_base, frequency_hz=2.0, title=safe_name)
+        # profiler_instance = Profiler(runs_base, frequency_hz=2.0, title=safe_name)
+        p = Profiler(runs_base, frequency_hz=2.0, title=safe_name,
+             cpu_power_max_w=200.0, 
+             gpu_power_max_w=200.0,
+             gpu_memory_total_gb= 16.376)
         ref_dir = os.path.join(runs_base, "reference")
         use_reference = os.path.isdir(ref_dir)
         run_dir = profiler_instance.start(use_reference=use_reference)
@@ -194,9 +197,7 @@ def main():
         "test_run_name": args.test_run_name,
         "run_dir": run_dir,
         "use_onnx": args.use_onnx,
-        "onnx_fnet": args.onnx_fnet,
-        "onnx_cnet": args.onnx_cnet,
-        "onnx_update": args.onnx_update,
+        "onnx_dir": args.onnx_dir,
         "onnx_tensorrt": args.onnx_tensorrt,
         "datapath": args.datapath,
         "gt_path": args.gt_path,
@@ -277,9 +278,9 @@ def main():
         cmd.append("--asynchronous")
     if args.use_onnx:
         cmd.append("--use_onnx")
-        cmd.extend(["--onnx_fnet", args.onnx_fnet])
-        cmd.extend(["--onnx_cnet", args.onnx_cnet])
-        cmd.extend(["--onnx_update", args.onnx_update])
+        cmd.extend(["--onnx_fnet", f'{args.onnx_dir}/fnet.onnx'])
+        cmd.extend(["--onnx_cnet", f'{args.onnx_cnet}/cnet.onnx'])
+        cmd.extend(["--onnx_update", f'{args.onnx_update}/onnx_update.onnx'])
     if args.onnx_tensorrt:
         cmd.append("--onnx_tensorrt")
 
